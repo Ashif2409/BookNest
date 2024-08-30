@@ -24,7 +24,7 @@ const bookSchema=new mongoose.Schema({
     language:{
       type: String,
       required:true,
-      enum: ["English","Hindi","Bengoli","Gujarati","Tamil","Telugu","Urdu","Marathi"]
+      enum: ["English","Hindi","Bengoli","Gujarati","Tamil","Telugu","Urdu","Marathi","odia"]
     },
     number_of_copies: {
       type:Number,

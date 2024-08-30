@@ -9,7 +9,8 @@ const { viewUserBooks,
         approveAdmin,
         deleteReqBook,
         ReturnBooks,
-        verifyReturnBook } = require('../controllers/admin.controllers');
+        verifyReturnBook,
+    usersWithOverdueBooks } = require('../controllers/admin.controllers');
 
 
 // router.use(auth)
@@ -29,5 +30,7 @@ router.post('/addbook',auth,authorize(["Admin"]),upload.single('BookProfile'),ad
 router.get('/confirmReturn',auth,authorize(["Admin"]),ReturnBooks);
 
 router.post('/verifyReturn',auth,authorize(["Admin"]),verifyReturnBook);
+
+router.get('/user-with-overdue',auth,authorize(["Admin"]),usersWithOverdueBooks);
   
 module.exports=router

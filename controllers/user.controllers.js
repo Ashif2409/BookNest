@@ -53,8 +53,12 @@ const signupUser = async (req, res) => {
       if (existingUser) {
         return res.status(401).json({ message: "User with this username already exists" });
       } else {
-        const imagePath=req.file.path
-        const profileUrl=await UploadAndReturnUrl(imagePath,'User');
+        let imagePath=null;
+        let profileUrl=null;
+        if(req.file){
+           imagePath=req.file.path
+           profileUrl=await UploadAndReturnUrl(imagePath,'User');
+        }
 
         //generate OTP;
         const otp=generateOTP();
@@ -67,13 +71,13 @@ const signupUser = async (req, res) => {
         const user = new User({
           username: username,
           password: password,
-          profile: profileUrl,
+          profile: profileUrl!==null?profileUrl:'',
           name:name,
           email:email,
           role: role,
           bookBorrow: [],
         });
-        fs.unlinkSync(imagePath);
+        if(profileUrl)fs.unlinkSync(imagePath);
         await user.save();
         res.status(201).json({"message":"OTP is been send to the register email",user})
       }
@@ -229,7 +233,7 @@ const editProfile=async(req,res)=>{
   const user=req.user;
   try {
     if(username){
-      const existingUser=await User.findOne(username);
+      const existingUser=await User.findOne({username});
       if(existingUser){
         return res.status(400).json({message:"User with this username already exist"});
       }
@@ -266,9 +270,14 @@ const editProfilePic=async(req,res)=>{
   const user=req.user;
   const ImgPath=req.file.path;
   try {
+  if(!ImgPath){
+    return res.status(404).json({message:"Please add profile picture"})
+  }
     const existingUser=await User.findById(user._id);
     const imgUrl= await UploadAndReturnUrl(ImgPath,'User');
     existingUser.profile=imgUrl;
+   await existingUser.save();
+   fs.unlinkSync(ImgPath);
     res.send("Successfull profile is updated");
   } catch (error) {
     res.status(500).send("Error updating profile");
@@ -299,7 +308,7 @@ const finePayment = async (req, res) => {
     borrowBook.fine=0;
     borrowBook.returned=true;
     await user.save();
-    
+    fs.unlinkSync(imagePath);
     res.status(200).json({ message: "Payment recorded successfully", user });
   } catch (error) {
     console.error("Error processing fine payment:", error);
@@ -310,11 +319,9 @@ const finePayment = async (req, res) => {
 const getUserProfile = async (req, res) => {
   const user = req.user;
   try {
-    // Assuming req.user is a Mongoose document or has a similar structure
     const {_doc,...otherField} = user;
     const {tokens, __v, createdAt, updatedAt,password, ...sharingFields} = _doc;
 
-    // Return only the sharingFields
     return res.send(sharingFields);
   } catch (error) {
     console.error("Error getting user profile:", error);
