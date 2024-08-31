@@ -1,6 +1,7 @@
 const BookDetails = require('../db/models/book.model')
 const ReqBook = require('../db/models/req.model');
 const User = require('../db/models/user.model');
+const { client } = require('../Service/redis');
 
 const getBooks = async (req, res) => {
   const { limit = 10, page = 1, } = req.query;
@@ -146,6 +147,7 @@ const reqBook = async (req, res) => {
       if (!requestedBook.userRequested) requestedBook.userRequested = [];
       requestedBook.userRequested.push(req.user._id)
       requestedBook.number_of_request += 1;
+      await client.del('req_book');
       await requestedBook.save();
       return res.status(200).json({ message: "Book is been added to Requested book DB", book: requestedBook });
     } else {
@@ -158,6 +160,7 @@ const reqBook = async (req, res) => {
         userRequested: [req.user._id]
       });
       const savedBook = await newReqBook.save();
+      client.del('req_book');
       return res.status(200).json({ message: "Book request added", book: savedBook });
     }
   } catch (error) {

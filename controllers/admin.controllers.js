@@ -58,17 +58,27 @@ const getUsersWhoBorrowedBook = async (req, res) => {
 
 const viewReqBooks = async (req, res) => {
   try {
-    const books = await ReqBook.find();
-    if (books) {
+    const booksDetail = await client.get('req_book');
+    let books;
+    
+    if (booksDetail) {
+      books = JSON.parse(booksDetail);
+    } else {
+      books = await ReqBook.find();
+      await client.set('req_book', JSON.stringify(books));
+    }
+    
+    if (books && books.length > 0) {
       res.status(200).json({ books: books });
     } else {
-      res.status(400).json({ messsage: "No book found" })
+      res.status(404).json({ message: "No book found" });
     }
-  } catch {
-    console.log("Error in fetching");
+  } catch (error) {
+    console.error("Error in fetching books:", error);
+    res.status(500).json({ message: "Internal Server Error" });
   }
-
 }
+
 
 const deleteReqBook = async (req, res) => {
   const { _id } = req.body;
