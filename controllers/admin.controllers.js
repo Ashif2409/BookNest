@@ -3,23 +3,38 @@ const BookDetails = require('../db/models/book.model');
 const ReqBook = require('../db/models/req.model');
 const { checkAvailableBook, confirmReturnBook, adminVerification } = require('../utils/checkDueDateAndReqBook');
 const UploadAndReturnUrl = require('../Service/Cloudinary');
-const fs = require('fs')
+const fs = require('fs');
+const { client } = require('../Service/redis');
 
 const viewUserBooks = async (req, res) => {
   const { username } = req.body;
 
   try {
-    const user = await User.findOne({ username });
-    if (user) {
-      res.status(200).json({ books: user.bookBorrow });
+    const cachedUserBooks = await client.get(`user_borrowBook:${username}`);
+    let books;
+
+    if (cachedUserBooks) {
+      books = JSON.parse(cachedUserBooks);
     } else {
-      res.json({ message: "User not found", books: [] });
+      const user = await User.findOne({ username });
+
+      if (user) {
+        books = user.bookBorrow;        
+        await client.set(`user_borrowBook:${username}`, JSON.stringify(books), {
+          EX: 3600 
+        });
+      } else {
+        return res.json({ message: "User not found", books: [] });
+      }
     }
+
+    return res.status(200).json({ books });
   } catch (error) {
     console.error("Error fetching user books:", error);
     res.status(500).json({ message: "Error fetching books" });
   }
 }
+
 
 const getUsersWhoBorrowedBook = async (req, res) => {
   const { bookName } = req.body;
