@@ -7,28 +7,27 @@ const fs = require('fs');
 const { client } = require('../Service/redis');
 
 const viewUserBooks = async (req, res) => {
-  const { username } = req.body;
+  const { userId } = req.body;
 
   try {
-    const cachedUserBooks = await client.get(`user_borrowBook:${username}`);
-    let books;
+    const cachedUser = await client.get(`userById:${userId}`);
+    let user=null;
 
-    if (cachedUserBooks) {
-      books = JSON.parse(cachedUserBooks);
+    if (cachedUser) {
+      user = JSON.parse(cachedUser);
+      return res.status(200).json({ books:user.bookBorrow });
     } else {
-      const user = await User.findOne({ username });
-
-      if (user) {
-        books = user.bookBorrow;        
-        await client.set(`user_borrowBook:${username}`, JSON.stringify(books), {
+      const user = await User.findById(userId );
+      if (user) {      
+        await client.set(`userById:${userId}`, JSON.stringify(user), {
           EX: 3600 
         });
+        return res.status(200).json({ books:user.bookBorrow });
       } else {
         return res.json({ message: "User not found", books: [] });
       }
     }
 
-    return res.status(200).json({ books });
   } catch (error) {
     console.error("Error fetching user books:", error);
     res.status(500).json({ message: "Error fetching books" });
@@ -39,19 +38,38 @@ const viewUserBooks = async (req, res) => {
 const getUsersWhoBorrowedBook = async (req, res) => {
   const { bookName } = req.body;
   try {
-    const book = await BookDetails.findOne({ bookname: bookName });
+    const cachedBooks=await client.get(`bookname:${bookName}`);
+    let book=null;
+    if(cachedBooks){
+      book=JSON.parse(cachedBooks);
+    }else{
+       book = await BookDetails.findOne({ bookname: bookName });
+       if(book){
+         await client.set(`bookname:${bookName}`,JSON.stringify(book),{EX:3600});
+       }
+    }
     if (book) {
       const users = await Promise.all(book.borrower.map(async (user) => {
-        return await User.findById(user)
+        const userCaching=await client.get(`userById:${user}`);
+        if(userCaching){
+          return JSON.parse(userCaching);
+        }else{
+          const userById= await User.findById(user);
+          if(userById){
+            await client.set(`userById:${user}`,JSON.stringify(userById),{EX:3600});
+          }
+          return userById;
+        }
       }));
-      const { _doc, ...otherField } = user;
-      const { tokens, __v, notification, createdAt, updatedAt, password, ...sharingFields } = _doc;
-
-      res.status(200).json(sharingFields)
+      if(cachedBooks){
+        return res.status(200).send(users);
+      }
+      return res.status(200).send(users)
     } else {
       res.status(400).json({ message: "No book found" })
     }
-  } catch {
+  } catch(error) {
+    console.log(error)
     res.status(500).send("Error fetching users")
   }
 }
@@ -65,7 +83,9 @@ const viewReqBooks = async (req, res) => {
       books = JSON.parse(booksDetail);
     } else {
       books = await ReqBook.find();
-      await client.set('req_book', JSON.stringify(books));
+      if(books){
+        await client.set('req_book', JSON.stringify(books),{EX:3600});
+      }
     }
     
     if (books && books.length > 0) {
@@ -87,49 +107,131 @@ const deleteReqBook = async (req, res) => {
     const requestedBook = await ReqBook.findById(_id);
 
     if (!requestedBook) {
+      if(req.file){
+        try {
+          fs.unlinkSync(req.file.path);
+        } catch (err) {
+          console.error('Failed to delete file:', err);
+        }
+      }
       return res.status(404).json({ message: "Requested book not found" });
     }
 
-    const existingBook = await BookDetails.findOne({ bookname: requestedBook.bookname });
-    if (!existingBook) {
-      const imagePath = req.file.path;
-      const BookImageUrl = await UploadAndReturnUrl(imagePath, 'Book');
+    const cachedBooks = await client.get(`bookname:${requestedBook.bookname}`);
+    let existingBook;
 
-      const newBook = new BookDetails({
-        bookname: requestedBook.bookname,
-        author: requestedBook.author,
-        genre: requestedBook.genre,
-        language: requestedBook.language,
-        coverPhoto: BookImageUrl,
-        number_of_copies: requestedBook.number_of_copies
-      });
-      await newBook.save();
-      fs.unlinkSync(imagePath);
-      const deletedBook = await ReqBook.findByIdAndDelete(_id);
-      if (deletedBook && deletedBook.userRequested) {
-        await Promise.all(
-          deletedBook.userRequested.map(user => checkAvailableBook(user, deletedBook.bookname))
-        );
+    if (cachedBooks) {
+      existingBook = JSON.parse(cachedBooks);
+    } else {
+      existingBook = await BookDetails.findOne({ bookname: requestedBook.bookname });
+    }
+
+    let BookImageUrl;
+
+    if (existingBook) {
+      existingBook.number_of_copies++;
+      const newExistingBook = await existingBook.save();
+      await client.set(`bookname:${requestedBook.bookname}`, JSON.stringify(newExistingBook), { EX: 3600 });
+    } else {
+      // If the book doesn't exist, check if a file was uploaded
+      if (req.file) {
+        const imagePath = req.file.path;
+        BookImageUrl = await UploadAndReturnUrl(imagePath, 'Book');
+        
+        const newBook = new BookDetails({
+          bookname: requestedBook.bookname,
+          author: requestedBook.author,
+          genre: requestedBook.genre,
+          language: requestedBook.language,
+          coverPhoto: BookImageUrl,
+          number_of_copies: requestedBook.number_of_copies,
+        });
+
+        const updatedBook = await newBook.save();
+        await client.set(`bookname:${updatedBook.bookname}`, JSON.stringify(updatedBook), { EX: 3600 });
+
+        // Delete the uploaded file after it's been processed
+        try {
+          fs.unlinkSync(imagePath);
+        } catch (err) {
+          console.error('Failed to delete file:', err);
+        }
+      } else {
+        return res.status(400).json({ message: "Image file is required when adding a new book" });
       }
     }
+
+    const deletedBook = await ReqBook.findByIdAndDelete(_id);
+    if (deletedBook && deletedBook.userRequested) {
+      await Promise.all(
+        deletedBook.userRequested.map(user => checkAvailableBook(user, deletedBook.bookname))
+      );
+    }
+
+    await client.del('req_book');
 
     res.status(200).json({ message: "Requested book deleted and added to library" });
   } catch (error) {
     console.error("Error deleting book:", error);
+
+    // Attempt to delete the file in case of an error
+    if (req.file && req.file.path) {
+      try {
+        fs.unlinkSync(req.file.path);
+      } catch (err) {
+        console.error('Error deleting file on failure:', err);
+      }
+    }
+
     res.status(500).json({ message: "Failed to add book in Library DB" });
   }
 };
 
+
+
+
 const addBookToLib = async (req, res) => {
   const { bookname, author, number_of_copies, genre, language } = req.body;
+
   try {
-    const existingBook = await BookDetails.findOne({ bookname });
-    if (existingBook) {
-      existingBook.number_of_copies++;
-      await existingBook.save();
+    const cachedBooks = await client.get(`bookname:${bookname}`);
+    let existingBook;
+    
+    if (cachedBooks) {
+      existingBook = JSON.parse(cachedBooks);
+
+      if (req.file) {
+        try {
+          fs.unlinkSync(req.file.path);
+        } catch (err) {
+          console.log("Error deleting image:", err);
+        }
+      }
     } else {
+      existingBook = await BookDetails.findOne({ bookname });
+
+      if (existingBook) {
+        await client.set(`bookname:${bookname}`, JSON.stringify(existingBook), { EX: 3600 });
+
+        if (req.file) {
+          try {
+            fs.unlinkSync(req.file.path);
+          } catch (err) {
+            console.log("Error deleting image:", err);
+          }
+        }
+      }
+    }
+
+    if (existingBook) {
+      // If the book already exists, increment the number of copies
+      existingBook.number_of_copies += 1;
+      await BookDetails.updateOne({ _id: existingBook._id }, { number_of_copies: existingBook.number_of_copies });
+    } else {
+      // If the book doesn't exist, upload the image and save the new book details
       const imagePath = req.file.path;
       const BookImageUrl = await UploadAndReturnUrl(imagePath, 'Book');
+
       const book = new BookDetails({
         bookname,
         author,
@@ -137,21 +239,53 @@ const addBookToLib = async (req, res) => {
         language,
         coverPhoto: BookImageUrl,
         number_of_copies,
-      })
+      });
+
       await book.save();
-      fs.unlinkSync(imagePath);
+      await client.set(`bookname:${book.bookname}`, JSON.stringify(book), { EX: 3600 });
+
+      // Clean up the uploaded image after successful upload and save
+      try {
+        fs.unlinkSync(imagePath);
+      } catch (err) {
+        console.error('Failed to delete file:', err);
+      }
     }
-    res.send(bookname + ' is added to the library');
+
+    res.send(`${bookname} is added to the library`);
   } catch (error) {
-    res.status(500).send("Won't able to add book");
+    console.log(error);
+
+    // Attempt to delete the image file if it exists in case of any error
+    if (req.file) {
+      try {
+        fs.unlinkSync(req.file.path);
+      } catch (err) {
+        console.error('Error deleting file on failure:', err);
+      }
+    }
+
+    res.status(500).send("Unable to add the book");
   }
-}
+};
+
+ 
+
 
 const approveAdmin = async (req, res) => {
   const userId = req.params.id;
 
   try {
-    const user = await User.findById(userId);
+    const cachedUser = await client.get(`userById:${userId}`);
+    let user=null;
+    if(cachedUser){
+      user=JSON.parse(cachedUser);
+    }else{
+      user = await User.findById(userId);
+      if(user){
+        await client.set(`userById:${userId}`,JSON.stringify(user),{EX:3600});
+      }
+    }
 
     if (!user) {
       return res.status(404).send("User not found");
@@ -199,7 +333,17 @@ const verifyReturnBook = async (req, res) => {
   const { userId, bookId } = req.body;
 
   try {
-    const user = await User.findById(userId);
+    const userCaching = await client.get(`userById:${userId}`);
+    let user = null;
+    
+    if (userCaching) {
+      user = JSON.parse(userCaching);
+    } else {
+      user = await User.findById(userId);
+      if (user) {
+        await client.set(`userById:${userId}`, JSON.stringify(user), { EX: 3600 });
+      }
+    }
 
     if (!user) {
       return res.status(404).send("User not found");
@@ -213,9 +357,16 @@ const verifyReturnBook = async (req, res) => {
 
     user.bookBorrow[bookIndex].verifyReturn = true;
     confirmReturnBook(user._id, user.bookBorrow[bookIndex].bookname);
-    await user.save();
-    const { _doc, ...otherField } = user
-    const { tokens, notification, password, createdAt, updatedAt, __v, ...fieldNeeded } = _doc
+
+    await User.updateOne(
+      { _id: user._id, "bookBorrow._id": bookId },
+      { $set: { "bookBorrow.$.verifyReturn": true } }
+    );
+
+    await client.set(`userById:${userId}`, JSON.stringify(user), { EX: 3600 });
+
+    const { _doc, ...otherField } = user;
+    const { tokens, notification, password, createdAt, updatedAt, __v, ...fieldNeeded } = _doc;
     res.status(200).send(fieldNeeded);
   } catch (error) {
     console.error("Error verifying book:", error);
@@ -223,34 +374,60 @@ const verifyReturnBook = async (req, res) => {
   }
 };
 
+
 const usersWithOverdueBooks = async (req, res) => {
   try {
-    const users = await User.find();
+    const usersCaching = await client.get('users');
+    let users;
+
+    if (usersCaching) {
+      users = JSON.parse(usersCaching);
+    } else {
+      users = await User.find();
+      if (users) {
+        await client.set('users', JSON.stringify(users),{EX:3600});
+      }
+    }
+
+    if (!users || users.length === 0) {
+      return res.status(404).send({ error: 'No users found.' });
+    }
+
     const today = new Date();
     const overdueUsers = [];
 
     for (const user of users) {
-      for (const element of user.bookBorrow) {
-        const dueDate = new Date(element.Due_Date);
-        const isOverdue = today > dueDate && element.returned === false;
+      try {
+        for (const element of user.bookBorrow) {
+          const dueDate = new Date(element.Due_Date);
+          const isOverdue = today > dueDate && element.returned === false;
 
-        if (isOverdue) {
-          overdueUsers.push(user);
-          break; 
+          if (isOverdue) {
+            overdueUsers.push(user);
+            break; 
+          }
         }
+      } catch (innerError) {
+        console.error(`Error processing user ${user._id}:`, innerError);
       }
     }
-    const sharingDetails=overdueUsers.map(user=>{
-      const { _doc, ...otherField } =user;
-        const { tokens, __v, notification, createdAt, updatedAt, password, ...sharingFields } = _doc;
-        return sharingFields
-    })
 
-      return res.status(200).json(sharingDetails)
+    const sharingDetails = overdueUsers.map(user => {
+      if(usersCaching){
+        return users;
+      }else{
+        const { _doc, ...otherField } = user;
+        const { tokens, __v, notification, createdAt, updatedAt, password, ...sharingFields } = _doc;
+        return sharingFields;
+      }
+    });
+    return res.status(200).json(sharingDetails);
   } catch (error) {
+    console.error('Error fetching users with overdue books:', error);
     return res.status(500).send({ error: 'An error occurred while fetching users with overdue books.' });
   }
 };
+
 
 
 module.exports = {

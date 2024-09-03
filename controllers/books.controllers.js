@@ -47,82 +47,120 @@ const issueBooks = async (req, res) => {
       return user.bookBorrow.filter(userBook => userBook.bookname === book && !userBook.returned).length;
     };
 
-    if (countUnreturnedBooks >= 2) {
-      return res.status(400).json({ message: "You can't borrow more than 2 books" });
+    if (countUnreturnedBooks(user, book) >= 2) {
+      return res.status(400).json({ message: "You can't borrow more than 2 copies of the same book" });
     }
 
-    const issueBook = await BookDetails.findOne({ bookname: book });
+    let cachedBook = await client.get(`bookname:${book}`);
+    let issueBook;
+
+    if (cachedBook) {
+      const issueBookDetail = JSON.parse(cachedBook);
+      issueBook = new BookDetails(issueBookDetail);
+      issueBook._id = issueBookDetail._id;
+    } else {
+      issueBook = await BookDetails.findOne({ bookname: book });
+      if (issueBook) {
+        await client.set(`bookname:${book}`, JSON.stringify(issueBook), { EX: 3600 });
+      }
+    }
+
     if (!issueBook || issueBook.number_of_copies === 0) {
       return res.status(404).json({ message: "Book not available for borrowing", books: user.bookBorrow });
     }
 
     if (user.bookBorrow.some(borrowedBook => borrowedBook.bookname === book && !borrowedBook.returned)) {
-      return res.status(409).json({ message: "You cannot buy the same book" });
+      return res.status(409).json({ message: "You cannot borrow the same book again before returning it" });
     }
 
-    const hasPendingFine = user.bookBorrow.find(borrowedBook => borrowedBook.fine > 0);
+    const hasPendingFine = user.bookBorrow.some(borrowedBook => borrowedBook.fine > 0);
     if (hasPendingFine) {
-      return res.status(400).json({ message: "First pay the fine of " + hasPendingFine.fine });
+      return res.status(400).json({ message: "First pay the outstanding fines before borrowing more books." });
     }
 
-    if (!issueBook.borrower) {
-      issueBook.borrower = [];
-    }
     issueBook.number_of_copies--;
     issueBook.bookIssuedCount++;
     issueBook.borrower.push(user._id);
-    await issueBook.save();
+
+    await client.set(`bookname:${book}`, JSON.stringify(issueBook), { EX: 3600 });
 
     const currentDate = new Date();
     currentDate.setDate(currentDate.getDate() + 7);
     const dueDate = currentDate.toISOString().split('T')[0];
 
-
-    user.bookBorrow = [...user.bookBorrow,
-    {
+    user.bookBorrow.push({
       bookname: book,
       Due_Date: dueDate,
       fine: 0,
-    }
-    ]
-    await user.save();
+    });
 
+    await user.save();
     res.status(200).json({ message: 'Book issued successfully', books: user.bookBorrow });
   } catch (error) {
     console.error('Error issuing book:', error);
     res.status(500).json({ message: 'Internal server error' });
   }
-}
+};
+
 
 const returnBook = async (req, res) => {
   const { book } = req.body;
-  const user = req.user
+  const user = req.user;
+
   try {
-    if (!user.bookBorrow.some(userBook => userBook.bookname === book && !userBook.returned)) {
-      return res.status(404).json({ message: "Book not found" });
+    const borrowedBook = user.bookBorrow.find(userBook => userBook.bookname === book && !userBook.returned);
+
+    if (!borrowedBook) {
+      return res.status(404).json({ message: "Book not found in user's borrowed list" });
     }
 
-    user.bookBorrow.forEach(borrowBook => {
-      if (borrowBook.bookname == book && !borrowBook.returned && borrowBook.fine == 0) borrowBook.returned = true;
-      else if (borrowBook.bookname == book && !borrowBook.returned && borrowBook.fine > 0) {
-        return res.status(400).json({ message: `Please pay the fine of ${borrowBook.fine} first` });
-      }
-    });
+    if (borrowedBook.fine > 0) {
+      return res.status(400).json({ message: `Please pay the fine of ${borrowedBook.fine} first` });
+    }
+
+    borrowedBook.returned = true;
     await user.save();
 
-    const issueBook = await BookDetails.findOne({ bookname: book });
-    if (!issueBook) {
-      return res.status(404).json({ message: "Book not found" });
+    let cachedBook = await client.get(`bookname:${book}`);
+    let issueBook;
+
+    if (cachedBook) {
+      issueBook = JSON.parse(cachedBook);
+    } else {
+      issueBook = await BookDetails.findOneAndUpdate(
+        { bookname: book },
+        { $inc: { number_of_copies: 1 }, $pull: { borrower: user._id } },
+        { new: true }
+      );
+      if (issueBook) {
+        await client.set(`bookname:${book}`, JSON.stringify(issueBook), { EX: 3600 });
+      }
     }
-    issueBook.number_of_copies++;
-    issueBook.borrower.pull(user._id)
-    await issueBook.save();
-    res.status(200).json({ message: "Succesfully Return", books: user.bookBorrow });
+
+    if (!issueBook) {
+      return res.status(404).json({ message: "Book not found in library" });
+    }
+
+    // If we had to use the cached data, we need to manually update number_of_copies and borrower array
+    if (cachedBook) {
+      issueBook.number_of_copies++;
+      await BookDetails.updateOne(
+        { bookname: book },
+        { $inc: { number_of_copies: 1 }, $pull: { borrower: user._id } }
+      );
+      await client.set(`bookname:${book}`, JSON.stringify(issueBook), { EX: 3600 });
+    }
+
+    res.status(200).json({ message: "Successfully returned", books: user.bookBorrow });
+
   } catch (error) {
     console.error('Error returning book:', error);
     res.status(500).json({ message: 'Internal server error' });
   }
-}
+};
+
+
+
 
 const reqBook = async (req, res) => {
   const { bookname, author, genre, language } = req.body;
@@ -131,7 +169,20 @@ const reqBook = async (req, res) => {
       return res.status(400).send("Give a valid author and bookname")
     }
 
-    const existingBook = await BookDetails.findOne({ bookname, author });
+    let cachedBook = await client.get(`bookname:${bookname}`);
+    let existingBook;
+
+    if (cachedBook) {
+      const issueBookDetail = JSON.parse(cachedBook);
+      existingBook = new BookDetails(issueBookDetail);
+      existingBook._id = issueBookDetail._id;
+    } else {
+      issueBook = await BookDetails.findOne({ bookname: bookname });
+      if (existingBook) {
+        await client.set(`bookname:${bookname}`, JSON.stringify(existingBook), { EX: 3600 });
+      }
+    }
+
 
     if (existingBook && existingBook.number_of_copies > 0) {
       return res.status(200).json({ message: "Book is already available in Library", book: existingBook });
@@ -147,7 +198,6 @@ const reqBook = async (req, res) => {
       if (!requestedBook.userRequested) requestedBook.userRequested = [];
       requestedBook.userRequested.push(req.user._id)
       requestedBook.number_of_request += 1;
-      await client.del('req_book');
       await requestedBook.save();
       return res.status(200).json({ message: "Book is been added to Requested book DB", book: requestedBook });
     } else {
@@ -171,7 +221,16 @@ const reqBook = async (req, res) => {
 
 const getMostIssuedBooks = async (req, res) => {
   const { limit = 10, page = 1 } = req.query;
+
   try {
+    const cacheKey = `mostIssuedBooks:limit=${limit}:page=${page}`;
+    const cachedData = await client.get(cacheKey);
+
+    if (cachedData) {
+      console.log('Serving from cache');
+      return res.status(200).send(JSON.parse(cachedData));
+    }
+
     const userCount = await User.countDocuments();
     const books = await BookDetails.find();
 
@@ -187,11 +246,14 @@ const getMostIssuedBooks = async (req, res) => {
     const skip = (page - 1) * limit;
     const paginatedBooks = bookIssuedPercentage.slice(skip, skip + parseInt(limit));
 
+    await client.set(cacheKey, JSON.stringify(paginatedBooks), { EX: 3600 });
+
     return res.status(200).send(paginatedBooks);
   } catch (error) {
     console.error("Error getting books:", error);
     return res.status(500).send("Error getting books");
   }
 };
+
 
 module.exports = { getBooks, issueBooks, returnBook, reqBook,getMostIssuedBooks }

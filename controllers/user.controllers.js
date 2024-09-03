@@ -3,90 +3,169 @@ const bcrypt=require('bcryptjs');
 const OTPModel = require('../db/models/OTP.model');
 const generateOTP=require('../utils/generateOTP');
 const UploadAndReturnUrl = require('../Service/Cloudinary');
-const fs = require('fs')
+const fs = require('fs');
+const { client } = require('../Service/redis');
 
 const loginUser = async (req, res) => {
-  const { username, password } = req.body;
+  const {
+      username,
+      password
+  } = req.body;
+
   try {
-    const user = await User.findOne({ username });
-    if (!user) {
-      return res.status(401).json({ message: 'Invalid username or password' });
-    }
+      let user;
+      const cachedUser = await client.get(`user:${username}`);
 
-    const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) {
-      return res.status(401).json({ message: 'Invalid username or password' });
-    }
-
-    const token = await user.generateAuthToken();
-
-    user.bookBorrow.forEach(borrow => {
-      if (borrow && borrow.Due_Date) { 
-        const dueDate = new Date(borrow.Due_Date);
-        const today = new Date();
-        const differenceInTime = today.getTime() - dueDate.getTime();
-        const differenceInDays = Math.ceil(differenceInTime / (1000 * 3600 * 24));
-
-        if (differenceInDays > 1) {
-          borrow.fine = (differenceInDays - 1) * 5;
-        } else {
-          borrow.fine = 0;
-        }
+      if (cachedUser) {
+          const userData = JSON.parse(cachedUser);
+          user = new User(userData);
+          user._id = userData._id; 
+      } else {
+          user = await User.findOne({
+              username
+          });
+          if (user) {
+              await client.set(`user:${username}`, JSON.stringify(user), {
+                  EX: 3600
+              });
+          }
       }
-    });
 
-    await user.save();
+      if (!user) {
+          return res.status(401).json({
+              message: 'Invalid username or password'
+          });
+      }
 
-    res.status(200).json({ user, token });
+      const isMatch = await bcrypt.compare(password, user.password);
+      if (!isMatch) {
+          return res.status(401).json({
+              message: 'Invalid username or password'
+          });
+      }
+
+      const token = await user.generateAuthToken();
+
+      // Update book borrow fines
+      user.bookBorrow.forEach(borrow => {
+          if (borrow && borrow.Due_Date) {
+              const dueDate = new Date(borrow.Due_Date);
+              const today = new Date();
+              const differenceInDays = Math.ceil((today - dueDate) / (1000 * 3600 * 24));
+
+              if (differenceInDays > 1) {
+                  borrow.fine = (differenceInDays - 1) * 5;
+              } else {
+                  borrow.fine = 0;
+              }
+          }
+      });
+
+      await user.save(); 
+
+      res.status(200).json({
+          user,
+          token
+      });
 
   } catch (error) {
-    console.error('Error during login:', error);
-    res.status(500).json({ message: 'Internal server error' });
+      console.error('Error during login:', error);
+      res.status(500).json({
+          message: 'Internal server error'
+      });
   }
 };
 
+
 const signupUser = async (req, res) => {
-  const { username, password, role,name,email } = req.body;
+  const {
+      username,
+      password,
+      role,
+      name,
+      email
+  } = req.body;
 
-  User.findOne({ username: username })
-    .then(async (existingUser) => {
-      if (existingUser) {
-        return res.status(401).json({ message: "User with this username already exists" });
-      } else {
-        let imagePath=null;
-        let profileUrl=null;
-        if(req.file){
-           imagePath=req.file.path
-           profileUrl=await UploadAndReturnUrl(imagePath,'User');
-        }
-
-        //generate OTP;
-        const otp=generateOTP();
-        const sendOTP= new OTPModel({
-           email,
-           otp
-         })
-         await sendOTP.save();
-
-        const user = new User({
-          username: username,
-          password: password,
-          profile: profileUrl!==null?profileUrl:'',
-          name:name,
-          email:email,
-          role: role,
-          bookBorrow: [],
-        });
-        if(profileUrl)fs.unlinkSync(imagePath);
-        await user.save();
-        res.status(201).json({"message":"OTP is been send to the register email",user})
+  try {
+      const cachedUser = await client.get(`user:${username}`);
+      if (cachedUser) {
+          if (req.file) {
+              fs.unlink(req.file.path, (err) => {
+                  if (err) console.error('Error deleting file:', err);
+              });
+          }
+          return res.status(401).json({
+              message: "User with this username already exists"
+          });
       }
-    })
-    .catch(error => {
-      console.error("Error finding user:", error);
-      res.sendStatus(500);
-    });
-}
+
+      const existingUser = await User.findOne({ username });
+      if (existingUser) {
+          await client.set(`user:${username}`, JSON.stringify(existingUser), { EX: 3600 });
+          if (req.file) {
+              fs.unlink(req.file.path, (err) => {
+                  if (err) console.error('Error deleting file:', err);
+              });
+          }
+          return res.status(401).json({
+              message: "User with this username already exists"
+          });
+      }
+
+      let imagePath = null;
+      let profileUrl = null;
+      if (req.file) {
+          imagePath = req.file.path;
+          console.log(imagePath);
+          profileUrl = await UploadAndReturnUrl(imagePath, 'User');
+      }
+
+      const otp = generateOTP();
+      const sendOTP = new OTPModel({
+          email,
+          otp,
+      });
+      await sendOTP.save();
+
+      const newUser = new User({
+          username,
+          password,
+          profile: profileUrl || '',
+          name,
+          email,
+          role,
+          bookBorrow: [],
+      });
+
+      await newUser.save();
+      await client.set(`user:${username}`, JSON.stringify(newUser), { EX: 3600 });
+
+      if (imagePath) {
+          fs.unlink(imagePath, (err) => {
+              if (err) console.error('Error deleting file:', err);
+          });
+      }
+
+      res.status(201).json({
+          message: "OTP has been sent to the registered email",
+          user: newUser
+      });
+  } catch (error) {
+      console.error('Error during signup:', error);
+
+      if (req.file) {
+          fs.unlink(req.file.path, (err) => {
+              if (err) console.error('Error deleting file:', err);
+          });
+      }
+
+      res.status(500).json({
+          message: 'Internal server error'
+      });
+  }
+};
+
+
 
 const verifyOTP = async(req,res)=>{
     const user=req.user;
@@ -183,21 +262,31 @@ const deleteNotification = async (req, res) => {
   }
 };
 
-const forgetPassword=async(req,res)=>{
-  const {email} = req.body;
+const forgetPassword = async (req, res) => {
+  const {
+      username
+  } = req.body;
   try {
-    const otp=generateOTP()
-    const SendOTP=new OTPModel({
-      email,
-      otp
-    });
-    await SendOTP.save();
-    const user=await User.findOne({email});
-    user.generateAuthToken();
-    await user.save();
-    res.send("OTP is been send to this email address");
+      let user = await User.findOne({
+              username
+          });
+          
+      if (user) {
+          const email = user.email;
+          const otp = generateOTP();
+          const SendOTP = new OTPModel({
+              email,
+              otp
+          });
+          await SendOTP.save();
+         await user.generateAuthToken();
+          res.status(200).json({message:"OTP is been send to the register email address"});
+      } else {
+          res.status(404).send("Username not found");
+      }
   } catch (error) {
-    res.status(500).send(error)
+      console.error('Error during password reset:', error);
+      res.status(500).send(error);
   }
 }
 
@@ -228,24 +317,52 @@ const resetPassword=async(req,res)=>{
   }
 }
 
-const editProfile=async(req,res)=>{
-  const {username,name}=req.body;
-  const user=req.user;
+const editProfile = async (req, res) => {
+  const {
+      username,
+      name
+  } = req.body;
+  const user = req.user;
   try {
-    if(username){
-      const existingUser=await User.findOne({username});
-      if(existingUser){
-        return res.status(400).json({message:"User with this username already exist"});
+      if (username) {
+
+          let user;
+          const cachedUser = await client.get(`user:${username}`);
+
+          if (cachedUser) {
+              const userData = JSON.parse(cachedUser);
+              user = new User(userData);
+              user._id = userData._id;
+          } else {
+              user = await User.findOne({
+                  username
+              });
+              if (user) {
+                  await client.set(`user:${username}`, JSON.stringify(user), {
+                      EX: 3600
+                  });
+                  return res.status(400).json({
+                      message: "User with this username already exist"
+                  });
+
+              }
+          }
+          user.username = username;
+          await client.del(`user:${user.username}`);
+          await client.set(`user:${username}`, JSON.stringify(user), {
+              EX: 3600
+          });
       }
-      user.username=username;
-    }
-    if(name){
-      user.name=name
-    }
-    await user.save();
-    res.status(240).send(user);
+      if (name) {
+          user.name = name
+      }
+      await user.save();
+      res.status(200).send(user);
   } catch (error) {
-    res.status(500).json({"message":"Error updating Profile"})
+      console.error('Error updating profile:', error);
+      res.status(500).json({
+          "message": "Error updating Profile"
+      })
   }
 }
 
@@ -253,15 +370,15 @@ const editPassword=async(req,res)=>{
   const {oldPassword,newPassword}=req.body;
   const user=req.user;
   try {
-    const existingUser=await User.findById({_id:user._id});
-    const isMatch=await bcrypt.compare(oldPassword,existingUser.password);
+    const isMatch=await bcrypt.compare(oldPassword,user.password);
     if(!isMatch){
       return res.status(400).json({message:"Old password is wrong"});
     }
     user.password=newPassword;
    await user.save();
-   return res.json({message:"Password updated Successfully"})
+   return res.status(200).json({message:"Password updated Successfully"})
   } catch (error) {
+    console.log(error);
     return res.status(500).json({message:"Can't change the password"});
   }
 }
@@ -269,14 +386,14 @@ const editPassword=async(req,res)=>{
 const editProfilePic=async(req,res)=>{
   const user=req.user;
   const ImgPath=req.file.path;
+  console.log(ImgPath);
   try {
   if(!ImgPath){
     return res.status(404).json({message:"Please add profile picture"})
   }
-    const existingUser=await User.findById(user._id);
     const imgUrl= await UploadAndReturnUrl(ImgPath,'User');
-    existingUser.profile=imgUrl;
-   await existingUser.save();
+    user.profile=imgUrl;
+   await user.save();
    fs.unlinkSync(ImgPath);
     res.send("Successfull profile is updated");
   } catch (error) {

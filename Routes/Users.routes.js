@@ -31,7 +31,7 @@ router.post('/logout',auth,logoutUser);
 
 
 router.patch('/editProfilePic',auth,upload.single('Avatar'),editProfilePic); 
-router.patch('/editProfile',auth,editProfile)
+router.patch('/editProfile',auth,editProfile);
 router.get('/profile',auth,getUserProfile);
 router.patch('/editPassword',auth,editPassword);
 router.post('/fine-payment',auth,upload.single('Screenshot'),finePayment);
