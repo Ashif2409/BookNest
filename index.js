@@ -27,10 +27,5 @@ app.use('/admin', adminRoutes);
 //redis connection
 const {connectToRedis} = require('./Service/redis');
 connectToRedis()
-// const setVal=async()=>{
-//     client.set('mykey','Hello from reddis');
-//     const myValue=await client.get('mykey');
-//     console.log(myValue);
-// }
-// setVal()
+
 app.listen(port, () => console.log(`Server is running on port ${port}`));
