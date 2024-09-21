@@ -1,9 +1,9 @@
-<img src="https://pingwings.ca/wp-content/uploads/2020/12/story-time.gif" alt="Story Time" width="300" height="200"/>
+<h1 style="display: inline;">BookNest Backend</h1>
+<img src="https://pingwings.ca/wp-content/uploads/2020/12/story-time.gif" alt="Story Time" width="100" height="100" style="vertical-align: middle;"/>
 
-# BookNest Backend
-
-BookNest is a Library Management System, a sanctuary for the curious mind.
+BookNest is a Library Management System, a sanctuary for the curious mind.  
 This repository contains the backend code for the **BookNest** application, a library management system that handles user authentication, book management, fine payments, notifications, and administrative tasks like book approvals and returns.
+
 
 
 ## Features
