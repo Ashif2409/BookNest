@@ -2,9 +2,9 @@
 
 
 
-    <h1 style="margin-right: 10px;">BookNest Backend</h1>
     <img src="https://pingwings.ca/wp-content/uploads/2020/12/story-time.gif" alt="Story Time" width="300" height="200"/>
 
+# BookNest Backend
 ## Features
 
 - User authentication: signup, login, OTP verification, password reset, and logout.
