@@ -77,6 +77,11 @@ This repository contains the backend code for the **BookNest** application, a li
    3.To run the containers in the background (detached mode):
      docker-compose up -d
    4.The application should now be running on the port defined in your .env file (default is port 8000).
+   
+## API Documentation
+
+Detailed API documentation can be found [here](https://documenter.getpostman.com/view/21537931/2sAXqtaMA5).
+
 
    ## API Endpoints
 
