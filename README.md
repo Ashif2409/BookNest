@@ -1,3 +1,4 @@
+![Story Time](https://pingwings.ca/wp-content/uploads/2020/12/story-time.gif)
 # BookNest Backend
 
 BookNest is a Library Management System, a sanctuary for the curious mind.
