@@ -4,7 +4,7 @@
 
   <div style="display: flex; align-items: center;">
     <h1 style="margin-right: 10px;">BookNest Backend</h1>
-    <img src="https://pingwings.ca/wp-content/uploads/2020/12/story-time.gif" alt="Story Time" width="100" height="100" />
+    <img src="https://pingwings.ca/wp-content/uploads/2020/12/story-time.gif" alt="Story Time" width="200" height="100" />
 </div>
 
 BookNest is a Library Management System, a sanctuary for the curious mind.  
