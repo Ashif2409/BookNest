@@ -87,6 +87,7 @@ const signupUser = async (req, res) => {
   } = req.body;
 
   try {
+    console.log('Signup request received:', req.body);
       const cachedUser = await client.get(`user:${username}`);
       if (cachedUser) {
           if (req.file) {
