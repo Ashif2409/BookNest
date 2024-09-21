@@ -54,9 +54,12 @@ This repository contains the backend code for the **BookNest** application, a li
    git clone https://github.com/Ashif2409/BookNest.git
 
 2. Install dependencies:
+
+    ```bash
+    npm init
     npm install
 
-3. Set up your environment variables in a .env file:
+4. Set up your environment variables in a .env file:
    - CLOUD_NAME=your_cloudinary_cloud_name
    - API_KEY=your_cloudinary_api_key
    - API_SECRET_KEY=your_cloudinary_api_secret
