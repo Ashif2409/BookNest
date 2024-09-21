@@ -49,18 +49,18 @@ This repository contains the backend code for the **BookNest** application, a li
     npm install
 
 3. Set up your environment variables in a .env file:
-   CLOUD_NAME=your_cloudinary_cloud_name
-   API_KEY=your_cloudinary_api_key
-   API_SECRET_KEY=your_cloudinary_api_secret
-   FINE_PER_DAY=your_fine_per_day_value
-   SMTP_HOST=your_smtp_host
-   SMTP_PORT=your_smtp_port
-   SMTP_USER=your_smtp_user
-   SMTP_PASSWORD=your_smtp_password
-   PORT=your_port
-   MONGODB_URL_PRODUCTION=your_production_db_url
-   REDIS_HOST=your_redis_host
-   REDIS_PORT=your_redis_port
+   - CLOUD_NAME=your_cloudinary_cloud_name
+   - API_KEY=your_cloudinary_api_key
+   - API_SECRET_KEY=your_cloudinary_api_secret
+   - FINE_PER_DAY=your_fine_per_day_value
+   - SMTP_HOST=your_smtp_host
+   - SMTP_PORT=your_smtp_port
+   - SMTP_USER=your_smtp_user
+   - SMTP_PASSWORD=your_smtp_password
+   - PORT=your_port
+   - MONGODB_URL_PRODUCTION=your_production_db_url
+   - REDIS_HOST=your_redis_host
+   - REDIS_PORT=your_redis_port
 
    ### Running with Docker
    1.Make sure Docker and Docker Compose are installed on your machine.
