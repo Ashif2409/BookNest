@@ -87,7 +87,6 @@ const signupUser = async (req, res) => {
   } = req.body;
 
   try {
-    console.log('Signup request received:', req.body);
       const cachedUser = await client.get(`user:${username}`);
       if (cachedUser) {
           if (req.file) {
@@ -99,7 +98,14 @@ const signupUser = async (req, res) => {
               message: "User with this username already exists"
           });
       }
-
+   
+    //if user with email already exist
+      const existingUserEmail = await User.findOne({ email });
+        if (existingUserEmail) {
+            console.log(`User with email ${email} already exists.`);
+            return res.status(409).json({ message: 'User with this email already exists' });
+        }
+    
       const existingUser = await User.findOne({ username });
       if (existingUser) {
           await client.set(`user:${username}`, JSON.stringify(existingUser), { EX: 3600 });
