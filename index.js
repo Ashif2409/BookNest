@@ -10,8 +10,6 @@ const port = process.env.PORT || 8000;
 app.use(cors());
 app.use(bodyParser.json());
 
-app.get('/',(req,res)=>{res.send("helloworld")})
-
 // Database Connection
 main().catch(err => console.log(err));
 
