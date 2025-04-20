@@ -19,6 +19,11 @@ const bookRoutes = require('./Routes/Book.routes');
 const adminRoutes = require('./Routes/Admin.routes');
 const dueDateCheck = require('./Service/node-cron');
 
+app.get('/health', (req, res) => {
+  return res.json({ message: "Hello from Health" });
+});
+
+
 dueDateCheck();
 app.use('/user', userRoutes);
 app.use('/book', bookRoutes);
