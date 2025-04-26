@@ -1,12 +1,18 @@
+const fs = require('fs');
 const multer = require('multer');
 const path = require('path');
 
 const imgPath = path.join(__dirname, '../public/profileImg');
 
+// Ensure directory exists
+if (!fs.existsSync(imgPath)) {
+  fs.mkdirSync(imgPath, { recursive: true });
+}
+
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
-    const filename=file.originalname
-    if(!/\.jpe?g$|\.png$/i.test(filename)){
+    const filename = file.originalname;
+    if (!/\.jpe?g$|\.png$/i.test(filename)) {
       return cb(new Error('Please upload a JPEG or PNG image'), null);
     }
     cb(null, imgPath);
