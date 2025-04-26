@@ -1,7 +1,6 @@
 const mongoose = require('mongoose');
-const jwt=require('jsonwebtoken')
-const bcrypt=require('bcryptjs');
-const { type } = require('express/lib/response');
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
 
 const bookBorrowSchema = new mongoose.Schema({
   bookname: {
@@ -16,29 +15,38 @@ const bookBorrowSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
-  returned:{
+  returned: {
     type: Boolean,
     default: false
   },
-  verifyReturn:{
-    type:Boolean,
-    default:false
+  verifyReturn: {
+    type: Boolean,
+    default: false
   },
-  paymentSS:{
+  paymentSS: {
     type: String,
+  },
+  IssueDate:{
+  type:Date,
+  required:true
+  },
+  bookId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Books',
+    required: true
   }
-})
+});
 
 const notificationSchema = new mongoose.Schema({
-  text:{
+  text: {
     type: String,
     required: true
   },
-  time:{
+  time: {
     type: Date,
     required: true
   }
-})
+});
 
 const userSchema = new mongoose.Schema({
   username: {
@@ -46,14 +54,12 @@ const userSchema = new mongoose.Schema({
     required: true,
     unique: true,
   },
-  profile:{
-    type: String
-  },
-  name:{
+  profile: String,
+  name: {
     type: String,
     required: true,
   },
-  email:{
+  email: {
     type: String,
     required: true,
     unique: true
@@ -62,17 +68,26 @@ const userSchema = new mongoose.Schema({
     type: String,
     required: true,
   },
-  bookBorrow: {
-    type:[bookBorrowSchema],
+  isVerified: {
+    type: Boolean,
+    default: false,
   },
-  role:{
-    type:String,
-    enum:['Student','Admin'],
-    default:'Student'
+  createdForVerification: {
+    type: Date,
+    default: function () {
+      return this.isVerified ? null : new Date();
+    },
+    index: { expireAfterSeconds: 600 }, // TTL: 10 minutes
   },
-  notification:{
-    type:[notificationSchema],
-    default:[]
+  bookBorrow: [bookBorrowSchema],
+  role: {
+    type: String,
+    enum: ['Student', 'Admin'],
+    default: 'Student'
+  },
+  notification: {
+    type: [notificationSchema],
+    default: []
   },
   tokens: [{
     token: {
@@ -81,42 +96,50 @@ const userSchema = new mongoose.Schema({
     }
   }]
 }, {
-  timestamps: true, 
-})
+  timestamps: true,
+});
 
-userSchema.pre('save',async function(next){
-  const user=this;
-  if(user.isModified('password')){
-    const hashPass=await bcrypt.hash(user.password, 8);
-    user.password=hashPass;
-  }
-  if (user.isNew) {
-    const token = jwt.sign({ userId: user._id.toString(), username: user.username }, 'LibManSys');
-    user.tokens.push({ token }); 
-  }
-   next();
-})
 
+// Hash password before saving
+userSchema.pre('save', async function (next) {
+  const user = this;
+
+  if (user.isModified('password')) {
+    const hashPass = await bcrypt.hash(user.password, 8);
+    user.password = hashPass;
+  }
+
+  next();
+});
+
+// Hide sensitive info when returning user object
 userSchema.methods.toJSON = function () {
   const user = this;
   const userObject = user.toObject();
+
   delete userObject.password;
   delete userObject.__v;
   delete userObject.updatedAt;
   delete userObject.createdAt;
+
   return userObject;
 };
 
+// Generate a new auth token and save
 userSchema.methods.generateAuthToken = async function () {
   const user = this;
 
-    const token= jwt.sign({ userId: user._id.toString(), username: user.username }, 'LibManSys');
-    user.tokens=[...user.tokens,{token}]
-    user.token=token
-    await user.save()
-    return token; 
-}
+  const token = jwt.sign(
+    { userId: user._id.toString(), username: user.username },
+    process.env.JWT_SECRET || 'LibManSys'
+  );
+
+  user.tokens.push({ token });
+  await user.save();
+
+  return token;
+};
 
 const User = mongoose.model('User', userSchema);
-module.exports = User
 
+module.exports = User;

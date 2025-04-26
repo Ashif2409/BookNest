@@ -77,27 +77,25 @@ const getUsersWhoBorrowedBook = async (req, res) => {
 const viewReqBooks = async (req, res) => {
   try {
     const booksDetail = await client.get('req_book');
-    let books;
-    
+    let books = [];
+
     if (booksDetail) {
       books = JSON.parse(booksDetail);
     } else {
       books = await ReqBook.find();
-      if(books){
-        await client.set('req_book', JSON.stringify(books),{EX:3600});
-      }
+      await client.set('req_book', JSON.stringify(books), { EX: 3600 });
     }
-    
-    if (books && books.length > 0) {
-      res.status(200).json({ books: books });
-    } else {
-      res.status(404).json({ message: "No book found" });
-    }
+
+    // Always return an array, even if empty
+    res.status(200).json({ books });
+
   } catch (error) {
-    console.error("Error in fetching books:", error);
+    console.error("Error in fetching requested books:", error);
     res.status(500).json({ message: "Internal Server Error" });
   }
-}
+};
+
+
 
 
 const deleteReqBook = async (req, res) => {
@@ -107,7 +105,7 @@ const deleteReqBook = async (req, res) => {
     const requestedBook = await ReqBook.findById(_id);
 
     if (!requestedBook) {
-      if(req.file){
+      if (req.file) {
         try {
           fs.unlinkSync(req.file.path);
         } catch (err) {
@@ -117,62 +115,31 @@ const deleteReqBook = async (req, res) => {
       return res.status(404).json({ message: "Requested book not found" });
     }
 
-    const cachedBooks = await client.get(`bookname:${requestedBook.bookname}`);
-    let existingBook;
-
-    if (cachedBooks) {
-      existingBook = JSON.parse(cachedBooks);
-    } else {
-      existingBook = await BookDetails.findOne({ bookname: requestedBook.bookname });
-    }
-
-    let BookImageUrl;
-
-    if (existingBook) {
-      existingBook.number_of_copies++;
-      const newExistingBook = await existingBook.save();
-      await client.set(`bookname:${requestedBook.bookname}`, JSON.stringify(newExistingBook), { EX: 3600 });
-    } else {
-      // If the book doesn't exist, check if a file was uploaded
-      if (req.file) {
-        const imagePath = req.file.path;
-        BookImageUrl = await UploadAndReturnUrl(imagePath, 'Book');
-        
-        const newBook = new BookDetails({
-          bookname: requestedBook.bookname,
-          author: requestedBook.author,
-          genre: requestedBook.genre,
-          language: requestedBook.language,
-          coverPhoto: BookImageUrl,
-          number_of_copies: requestedBook.number_of_copies,
-        });
-
-        const updatedBook = await newBook.save();
-        await client.set(`bookname:${updatedBook.bookname}`, JSON.stringify(updatedBook), { EX: 3600 });
-
-        // Delete the uploaded file after it's been processed
-        try {
-          fs.unlinkSync(imagePath);
-        } catch (err) {
-          console.error('Failed to delete file:', err);
-        }
-      } else {
-        return res.status(400).json({ message: "Image file is required when adding a new book" });
-      }
-    }
-
+    // Delete the requested book
     const deletedBook = await ReqBook.findByIdAndDelete(_id);
+
+    // Clean up any related cache
+    await client.del('req_book');
+
+    // Optionally update users who requested the book
     if (deletedBook && deletedBook.userRequested) {
       await Promise.all(
         deletedBook.userRequested.map(user => checkAvailableBook(user, deletedBook.bookname))
       );
     }
 
-    await client.del('req_book');
+    // Clean up uploaded file if present
+    if (req.file && req.file.path) {
+      try {
+        fs.unlinkSync(req.file.path);
+      } catch (err) {
+        console.error('Error deleting uploaded file:', err);
+      }
+    }
 
-    res.status(200).json({ message: "Requested book deleted and added to library" });
+    res.status(200).json({ message: "Requested book deleted successfully" });
   } catch (error) {
-    console.error("Error deleting book:", error);
+    console.error("Error deleting requested book:", error);
 
     // Attempt to delete the file in case of an error
     if (req.file && req.file.path) {
@@ -183,9 +150,10 @@ const deleteReqBook = async (req, res) => {
       }
     }
 
-    res.status(500).json({ message: "Failed to add book in Library DB" });
+    res.status(500).json({ message: "Failed to delete requested book" });
   }
 };
+
 
 
 
@@ -194,12 +162,15 @@ const addBookToLib = async (req, res) => {
   const { bookname, author, number_of_copies, genre, language } = req.body;
 
   try {
+    // Check if the book already exists in the cache
     const cachedBooks = await client.get(`bookname:${bookname}`);
     let existingBook;
-    
+
+    // If book exists in cache
     if (cachedBooks) {
       existingBook = JSON.parse(cachedBooks);
 
+      // If there's an image file, delete it after getting the cache
       if (req.file) {
         try {
           fs.unlinkSync(req.file.path);
@@ -208,11 +179,14 @@ const addBookToLib = async (req, res) => {
         }
       }
     } else {
+      // If the book doesn't exist in cache, look for it in the database
       existingBook = await BookDetails.findOne({ bookname });
 
+      // If found, cache it
       if (existingBook) {
         await client.set(`bookname:${bookname}`, JSON.stringify(existingBook), { EX: 3600 });
 
+        // If there's an image file, delete it after caching the book
         if (req.file) {
           try {
             fs.unlinkSync(req.file.path);
@@ -223,12 +197,12 @@ const addBookToLib = async (req, res) => {
       }
     }
 
+    // If book already exists, increment the number of copies
     if (existingBook) {
-      // If the book already exists, increment the number of copies
       existingBook.number_of_copies += 1;
       await BookDetails.updateOne({ _id: existingBook._id }, { number_of_copies: existingBook.number_of_copies });
     } else {
-      // If the book doesn't exist, upload the image and save the new book details
+      // If the book doesn't exist, create a new book entry
       const imagePath = req.file.path;
       const BookImageUrl = await UploadAndReturnUrl(imagePath, 'Book');
 
@@ -241,10 +215,11 @@ const addBookToLib = async (req, res) => {
         number_of_copies,
       });
 
+      // Save the new book
       await book.save();
       await client.set(`bookname:${book.bookname}`, JSON.stringify(book), { EX: 3600 });
 
-      // Clean up the uploaded image after successful upload and save
+      // Clean up the uploaded image after saving
       try {
         fs.unlinkSync(imagePath);
       } catch (err) {
@@ -252,7 +227,15 @@ const addBookToLib = async (req, res) => {
       }
     }
 
+    // ✅ Invalidate all related cached book lists
+    const pattern = `books:*`; // match all query-based caches
+    const keys = await client.keys(pattern);
+    if (keys.length > 0) {
+      await client.del(...keys); // delete the matched keys
+    }
+
     res.send(`${bookname} is added to the library`);
+
   } catch (error) {
     console.log(error);
 
@@ -276,34 +259,52 @@ const approveAdmin = async (req, res) => {
   const userId = req.params.id;
 
   try {
+    // Check if the user is cached
     const cachedUser = await client.get(`userById:${userId}`);
-    let user=null;
-    if(cachedUser){
-      user=JSON.parse(cachedUser);
-    }else{
+    let user = null;
+
+    if (cachedUser) {
+      // If user is cached, parse the cached data
+      user = JSON.parse(cachedUser);
+    } else {
+      // If not cached, fetch the user from the database
       user = await User.findById(userId);
-      if(user){
-        await client.set(`userById:${userId}`,JSON.stringify(user),{EX:3600});
+      if (user) {
+        // Cache the user data for 1 hour (3600 seconds)
+        await client.set(`userById:${userId}`, JSON.stringify(user), { EX: 3600 });
       }
     }
 
+    // Check if the user exists
     if (!user) {
       return res.status(404).send("User not found");
     }
 
+    // Update the user's role to Admin
     user.role = "Admin";
+
+    // Call the admin verification function (assuming it handles specific admin verification logic)
     adminVerification(userId);
+
+    // Save the updated user
     await user.save();
 
+    // Remove the cached data after the user role is updated to reflect the change
+    await client.del(`userById:${userId}`);
+
+    // Return success response
     res.status(200).json({ message: "Role updated to Admin successfully", user });
+
   } catch (error) {
     console.error("Error updating role:", error.message);
     res.status(500).json({ message: "Unable to change the role to admin" });
   }
 };
 
+
 const ReturnBooks = async (req, res) => {
   try {
+
     const users = await User.find({
       bookBorrow: {
         $elemMatch: {
@@ -312,61 +313,102 @@ const ReturnBooks = async (req, res) => {
         }
       }
     });
-    const filterFieldsUser = users.map((user) => {
-      const { _doc, ...otherParams } = user;
-      const { _id, username, profile, name, email, bookBorrow, tokens, notification, createdAt, updatedAt, __v, password, ...sharingDetails } = _doc;
-      const filterData = bookBorrow.filter(book => {
-        if (book.returned == true && book.verifyReturn == false) {
-          return true;
+
+
+    for (let user of users) {
+
+      user.bookBorrow = user.bookBorrow.map((book) => {
+        if (book.returned === true && book.verifyReturn === false) {
+          book.verifyReturn = true;
         }
-      })
+        return book;
+      });
+
+      await user.save();
+
+      // Delete user cache
+      try {
+        await client.del(`userById:${user._id}`);
+      } catch (err) {
+        console.error(`❌ Failed to delete cache userById:${user._id}`, err);
+      }
+
+      // Delete all related bookname caches
+      const uniqueBookNames = [
+        ...new Set(
+          user.bookBorrow
+            .filter((b) => b.returned === true && b.verifyReturn === true)
+            .map((b) => b.bookname)
+        )
+      ];
+
+
+      for (let bookName of uniqueBookNames) {
+        try {
+          await client.del(`bookname:${bookName}`);
+        } catch (err) {
+          console.error(`❌ Failed to delete cache bookname:${bookName}`, err);
+        }
+      }
+    }
+
+    // After updating users
+
+    const filterFieldsUser = users.map((user) => {
+      const { _doc } = user;
+      const { _id, username, profile, name, email, bookBorrow } = _doc;
+      const filterData = bookBorrow.filter(book => {
+        return book.returned === true && book.verifyReturn === false;
+      });
       return { _id, username, profile, name, email, filterData };
-    })
+    });
+
+
     res.status(200).json(filterFieldsUser);
+
   } catch (error) {
+    console.error("❗ Error fetching users", error);
     res.status(500).json({ message: 'Error fetching users' });
   }
+};
 
-}
+
+
 
 const verifyReturnBook = async (req, res) => {
   const { userId, bookId } = req.body;
 
   try {
-    const userCaching = await client.get(`userById:${userId}`);
-    let user = null;
-    
-    if (userCaching) {
-      user = JSON.parse(userCaching);
-    } else {
-      user = await User.findById(userId);
-      if (user) {
-        await client.set(`userById:${userId}`, JSON.stringify(user), { EX: 3600 });
-      }
-    }
-
+    const user = await User.findById(userId);
     if (!user) {
       return res.status(404).send("User not found");
     }
 
     const bookIndex = user.bookBorrow.findIndex(book => book._id.toString() === bookId.toString());
-
     if (bookIndex === -1) {
       return res.status(404).send("Book not found in user's borrowed list");
     }
 
     user.bookBorrow[bookIndex].verifyReturn = true;
-    confirmReturnBook(user._id, user.bookBorrow[bookIndex].bookname);
 
+    // Get bookname before updating
+    const bookname = user.bookBorrow[bookIndex].bookname;
+
+    // Update the book in the database
     await User.updateOne(
       { _id: user._id, "bookBorrow._id": bookId },
       { $set: { "bookBorrow.$.verifyReturn": true } }
     );
 
-    await client.set(`userById:${userId}`, JSON.stringify(user), { EX: 3600 });
+    // ❌ Remove user cache
+    await client.del(`userById:${userId}`);
+
+    // ✅ Also remove book cache
+    await client.del(`bookname:${bookname}`);
 
     const { _doc, ...otherField } = user;
     const { tokens, notification, password, createdAt, updatedAt, __v, ...fieldNeeded } = _doc;
+
     res.status(200).send(fieldNeeded);
   } catch (error) {
     console.error("Error verifying book:", error);
@@ -375,17 +417,18 @@ const verifyReturnBook = async (req, res) => {
 };
 
 
+
 const usersWithOverdueBooks = async (req, res) => {
   try {
-    const usersCaching = await client.get('users');
     let users;
+    const usersCaching = await client.get('userdue');
 
     if (usersCaching) {
       users = JSON.parse(usersCaching);
     } else {
       users = await User.find();
       if (users) {
-        await client.set('users', JSON.stringify(users),{EX:3600});
+        await client.set('userdue', JSON.stringify(users), { EX: 3600 });
       }
     }
 
@@ -412,22 +455,26 @@ const usersWithOverdueBooks = async (req, res) => {
       }
     }
 
+    // If there are overdue users, update the cache with only overdue users
+    if (overdueUsers.length > 0) {
+      await client.set('userdue', JSON.stringify(overdueUsers), { EX: 3600 });
+    }
+
+    // Safely destructure and exclude unnecessary fields
     const sharingDetails = overdueUsers.map(user => {
-      if(usersCaching){
-        return users;
-      }else{
-        const { _doc, ...otherField } = user;
-        const { tokens, __v, notification, createdAt, updatedAt, password, ...sharingFields } = _doc;
-        return sharingFields;
-      }
+      // Check if '_doc' exists
+      const userDoc = user._doc || user; // If _doc exists, use it; otherwise, use user directly
+      const { tokens, __v, notification, createdAt, updatedAt, password, ...sharingFields } = userDoc;
+
+      return sharingFields;
     });
+    
     return res.status(200).json(sharingDetails);
   } catch (error) {
     console.error('Error fetching users with overdue books:', error);
     return res.status(500).send({ error: 'An error occurred while fetching users with overdue books.' });
   }
 };
-
 
 
 module.exports = {
