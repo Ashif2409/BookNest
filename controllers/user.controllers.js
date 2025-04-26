@@ -98,53 +98,78 @@ const loginUser = async (req, res) => {
 };
 
 
+const safeUnlink = (path) => {
+  fs.unlink(path, (err) => {
+    if (err) {
+      if (err.code === 'ENOENT') {
+        console.warn(`File not found during deletion: ${path}`);
+      } else {
+        console.error(`Error deleting file: ${path}`, err);
+      }
+    }
+  });
+};
+
+// Signup Controller
 const signupUser = async (req, res) => {
-  const { username, password, role, name, email } = req.body
+  const { username, password, role, name, email } = req.body;
 
   try {
-    const cachedUser = await safeRedisGet(`user:${username}`)
+    // Check in Redis cache first
+    const cachedUser = await safeRedisGet(`user:${username}`);
     if (cachedUser) {
-      if (req.file) {
-        fs.unlink(req.file.path, (err) => {
-          if (err) console.error("Error deleting file:", err)
-        })
-      }
+      if (req.file) safeUnlink(req.file.path);
+
       return res.status(401).json({
         message: "User with this username already exists",
-      })
+      });
     }
 
-    const existingUserEmail = await User.findOne({ email })
+    // Check email in database
+    const existingUserEmail = await User.findOne({ email });
     if (existingUserEmail) {
-      return res.status(409).json({ message: "User with this email already exists" })
+      if (req.file) safeUnlink(req.file.path);
+
+      return res.status(409).json({
+        message: "User with this email already exists",
+      });
     }
 
-    const existingUser = await User.findOne({ username })
+    // Check username in database
+    const existingUser = await User.findOne({ username });
     if (existingUser) {
-      await safeRedisSet(`user:${username}`, JSON.stringify(existingUser), { EX: 3600 })
-      if (req.file) {
-        fs.unlink(req.file.path, (err) => {
-          if (err) console.error("Error deleting file:", err)
-        })
-      }
+      await safeRedisSet(`user:${username}`, JSON.stringify(existingUser), { EX: 3600 });
+      if (req.file) safeUnlink(req.file.path);
+
       return res.status(401).json({
         message: "User with this username already exists",
-      })
+      });
     }
 
-    let imagePath = null
-    let profileUrl = null
+    // Handle file upload if exists
+    let imagePath = null;
+    let profileUrl = null;
+
     if (req.file) {
-      imagePath = req.file.path
-      profileUrl = await UploadAndReturnUrl(imagePath, "User")
+      imagePath = req.file.path;
+      try {
+        profileUrl = await UploadAndReturnUrl(imagePath, "User");
+      } catch (uploadError) {
+        console.error("Error uploading image:", uploadError);
+        safeUnlink(imagePath);
+
+        return res.status(500).json({
+          message: "Failed to upload profile image",
+        });
+      }
     }
 
-    const otp = generateOTP()
-    const sendOTP = new OTPModel({
-      email,
-      otp,
-    })
-    await sendOTP.save()
+    // Generate OTP and save
+    const otp = generateOTP();
+    const sendOTP = new OTPModel({ email, otp });
+    await sendOTP.save();
+
+    // Create new user
     const newUser = new User({
       username,
       password,
@@ -153,37 +178,35 @@ const signupUser = async (req, res) => {
       email,
       role,
       bookBorrow: [],
-    })
-    
-    await newUser.save()
-    await safeRedisDel('all_users');
-    await safeRedisSet(`user:${username}`, JSON.stringify(newUser), { EX: 3600 })
+    });
 
-    if (imagePath) {
-      fs.unlink(imagePath, (err) => {
-        if (err) console.error("Error deleting file:", err)
-      })
-    }
-    const token = await newUser.generateAuthToken()
+    await newUser.save();
+
+    // Update Redis cache
+    await safeRedisDel('all_users');
+    await safeRedisSet(`user:${username}`, JSON.stringify(newUser), { EX: 3600 });
+
+    // Delete the local file after upload
+    if (imagePath) safeUnlink(imagePath);
+
+    // Generate JWT token
+    const token = await newUser.generateAuthToken();
+
     res.status(201).json({
       message: "OTP has been sent to the registered email",
       user: newUser,
       token,
-    })
+    });
   } catch (error) {
-    console.error("Error during signup:", error)
+    console.error("Error during signup:", error);
 
-    if (req.file) {
-      fs.unlink(req.file.path, (err) => {
-        if (err) console.error("Error deleting file:", err)
-      })
-    }
+    if (req.file) safeUnlink(req.file.path);
 
     res.status(500).json({
       message: "Internal server error",
-    })
+    });
   }
-}
+};
 
 const verifyOTP = async (req, res) => {
   const user = req.user
