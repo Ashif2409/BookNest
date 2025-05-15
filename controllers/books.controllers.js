@@ -144,6 +144,7 @@ const issueBooks = async (req, res) => {
       } catch (redisError) {
         console.error("Redis error during book cache deletion:", redisError);
       }
+      await client.del(`bookname:${book}`);
       return res.status(404).json({
         message: "Book not available for borrowing",
         books: user.bookBorrow,
@@ -155,6 +156,7 @@ const issueBooks = async (req, res) => {
         (borrowedBook) => borrowedBook.bookname === book && !borrowedBook.returned
       )
     ) {
+      await client.del(`bookname:${book}`);
       return res.status(409).json({
         message: "You cannot borrow the same book again before returning it",
       });
@@ -162,6 +164,7 @@ const issueBooks = async (req, res) => {
 
     const hasPendingFine = user.bookBorrow.some((borrowedBook) => borrowedBook.fine > 0);
     if (hasPendingFine) {
+      await client.del(`bookname:${book}`);
       return res.status(400).json({
         message: "First pay the outstanding fines before borrowing more books.",
       });
@@ -179,7 +182,7 @@ const issueBooks = async (req, res) => {
     }
 
     const currentDate = new Date();
-    currentDate.setDate(currentDate.getDate() - 1);
+    currentDate.setDate(currentDate.getDate() + 7);
     const dueDate = currentDate.toISOString().split("T")[0];
 
     user.bookBorrow.push({
@@ -204,6 +207,7 @@ const issueBooks = async (req, res) => {
       books: user.bookBorrow,
     });
   } catch (error) {
+    await client.del(`bookname:${book}`);
     console.error("Error issuing book:", error);
     res.status(500).json({ message: "Internal server error" });
   }
